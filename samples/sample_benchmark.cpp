@@ -7,8 +7,6 @@
 #include "settings.h"
 
 #include "box2d/box2d.h"
-#include "box2d/geometry.h"
-#include "box2d/hull.h"
 #include "box2d/math_functions.h"
 
 #include <GLFW/glfw3.h>
@@ -20,9 +18,11 @@ class BenchmarkBarrel : public Sample
 public:
 	enum ShapeType
 	{
-		e_mixShape = 0,
-		e_compoundShape = 1,
-		e_humanShape = 2,
+		e_circleShape = 0,
+		e_caspuleShape,
+		e_mixShape,
+		e_compoundShape,
+		e_humanShape,
 	};
 
 	enum
@@ -37,8 +37,10 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {8.0f, 53.0f};
-			g_camera.m_zoom = 2.35f;
+			g_camera.m_zoom = 25.0f * 2.35f;
 		}
+
+		settings.drawJoints = false;
 
 		float groundSize = 25.0f;
 
@@ -65,7 +67,7 @@ public:
 			m_bodies[i] = b2_nullBodyId;
 		}
 
-		m_shapeType = e_humanShape;
+		m_shapeType = e_circleShape;
 
 		CreateScene();
 	}
@@ -180,7 +182,22 @@ public:
 				bodyDef.position = {x + side, y};
 				side = -side;
 
-				if (m_shapeType == e_mixShape)
+				if (m_shapeType == e_circleShape)
+				{
+					m_bodies[index] = b2CreateBody(m_worldId, &bodyDef);
+					circle.radius = RandomFloat(0.25f, 0.75f);
+					b2CreateCircleShape(m_bodies[index], &shapeDef, &circle);
+				}
+				else if (m_shapeType == e_caspuleShape)
+				{
+					m_bodies[index] = b2CreateBody(m_worldId, &bodyDef);
+					capsule.radius = RandomFloat(0.25f, 0.5f);
+					float length = RandomFloat(0.25f, 1.0f);
+					capsule.center1 = {0.0f, -0.5f * length};
+					capsule.center2 = {0.0f, 0.5f * length};
+					b2CreateCapsuleShape(m_bodies[index], &shapeDef, &capsule);
+				}
+				else if (m_shapeType == e_mixShape)
 				{
 					m_bodies[index] = b2CreateBody(m_worldId, &bodyDef);
 
@@ -206,7 +223,7 @@ public:
 
 						// Don't put a function call into a macro.
 						float value = RandomFloat(-1.0f, 1.0f);
-						box.radius = 0.25f * B2_MAX(0.0f, value);
+						box.radius = 0.25f * b2MaxFloat(0.0f, value);
 						b2CreatePolygonShape(m_bodies[index], &shapeDef, &box);
 					}
 					else
@@ -237,13 +254,13 @@ public:
 
 	void UpdateUI() override
 	{
-		float height = 100.0f;
+		float height = 80.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
-		ImGui::Begin("Stacks", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::SetNextWindowSize(ImVec2(220.0f, height));
+		ImGui::Begin("Benchmark: Barrel", nullptr, ImGuiWindowFlags_NoResize);
 
 		bool changed = false;
-		const char* shapeTypes[] = {"Mix", "Compound", "Human"};
+		const char* shapeTypes[] = {"Circle", "Capsule", "Mix", "Compound", "Human"};
 
 		int shapeType = int(m_shapeType);
 		changed = changed || ImGui::Combo("Shape", &shapeType, shapeTypes, IM_ARRAYSIZE(shapeTypes));
@@ -283,7 +300,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {1.5f, 10.0f};
-			g_camera.m_zoom = 0.6f;
+			g_camera.m_zoom = 25.0f * 0.6f;
 		}
 
 		b2BodyId groundId;
@@ -355,10 +372,11 @@ public:
 
 	void UpdateUI() override
 	{
-		float height = 100.0f;
+		float height = 60.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
-		ImGui::Begin("Tumbler", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::SetNextWindowSize(ImVec2(200.0f, height));
+		ImGui::Begin("Benchmark: Tumbler", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::PushItemWidth(120.0f);
 
 		if (ImGui::SliderFloat("Speed", &m_motorSpeed, 0.0f, 100.0f, "%.f"))
 		{
@@ -370,6 +388,7 @@ public:
 			}
 		}
 
+		ImGui::PopItemWidth();
 		ImGui::End();
 	}
 
@@ -394,7 +413,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {1.0f, -5.5};
-			g_camera.m_zoom = 3.4f;
+			g_camera.m_zoom = 25.0f * 3.4f;
 			settings.drawJoints = false;
 		}
 
@@ -498,10 +517,11 @@ public:
 
 	void UpdateUI() override
 	{
-		float height = 120.0f;
+		float height = 110.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
-		ImGui::Begin("Many Tumblers", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::SetNextWindowSize(ImVec2(200.0f, height));
+		ImGui::Begin("Benchmark: Many Tumblers", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::PushItemWidth(100.0f);
 
 		bool changed = false;
 		changed = changed || ImGui::SliderInt("Row Count", &m_rowCount, 1, 32);
@@ -521,6 +541,7 @@ public:
 			}
 		}
 
+		ImGui::PopItemWidth();
 		ImGui::End();
 	}
 
@@ -581,7 +602,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 50.0f};
-			g_camera.m_zoom = 2.2f;
+			g_camera.m_zoom = 25.0f * 2.2f;
 		}
 
 #ifdef NDEBUG
@@ -607,7 +628,7 @@ public:
 		shapeDef.density = 1.0f;
 
 		float h = 0.5f;
-		b2Polygon box = b2MakeSquare(h);
+		b2Polygon box = b2MakeRoundedBox(h - 0.05f, h - 0.05f, 0.05f);
 
 		float shift = 1.0f * h;
 
@@ -644,14 +665,14 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {16.0f, 110.0f};
-			g_camera.m_zoom = 5.0f;
+			g_camera.m_zoom = 25.0f * 5.0f;
 		}
 
 		m_extent = 0.5f;
 		m_round = 0.0f;
 		m_baseCount = 10;
-		m_rowCount = g_sampleDebug ? 4 : 20;
-		m_columnCount = g_sampleDebug ? 4 : 20;
+		m_rowCount = g_sampleDebug ? 4 : 13;
+		m_columnCount = g_sampleDebug ? 4 : 14;
 		m_groundId = b2_nullBodyId;
 		m_bodyIds = nullptr;
 		m_bodyCount = 0;
@@ -753,8 +774,9 @@ public:
 	{
 		float height = 160.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
-		ImGui::Begin("Stacks", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::SetNextWindowSize(ImVec2(200.0f, height));
+		ImGui::Begin("Benchmark: Many Pyramids", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::PushItemWidth(100.0f);
 
 		bool changed = false;
 		changed = changed || ImGui::SliderInt("Row Count", &m_rowCount, 1, 32);
@@ -769,6 +791,7 @@ public:
 			CreateScene();
 		}
 
+		ImGui::PopItemWidth();
 		ImGui::End();
 	}
 
@@ -805,7 +828,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 50.0f};
-			g_camera.m_zoom = 2.2f;
+			g_camera.m_zoom = 25.0f * 2.2f;
 		}
 
 		float groundSize = 100.0f;
@@ -921,7 +944,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 50.0f};
-			g_camera.m_zoom = 2.2f;
+			g_camera.m_zoom = 25.0f * 2.2f;
 		}
 
 		float groundSize = 100.0f;
@@ -1064,8 +1087,8 @@ public:
 	{
 		if (settings.restart == false)
 		{
-			g_camera.m_zoom = 2.5f;
 			g_camera.m_center = {60.0f, -57.0f};
+			g_camera.m_zoom = 25.0f * 2.5f;
 		}
 
 		constexpr int N = g_sampleDebug ? 10 : 100;
@@ -1135,10 +1158,10 @@ public:
 
 	void UpdateUI() override
 	{
-		float height = 100.0f;
+		float height = 60.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
 		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
-		ImGui::Begin("Joint Grid", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::Begin("Benchmark: Joint Grid", nullptr, ImGuiWindowFlags_NoResize);
 
 		if (ImGui::SliderFloat("gravity", &m_gravity, 0.0f, 20.0f, "%.1f"))
 		{
@@ -1167,7 +1190,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {60.0f, 6.0f};
-			g_camera.m_zoom = 1.6f;
+			g_camera.m_zoom = 25.0f * 1.6f;
 		}
 
 		b2World_SetGravity(m_worldId, b2Vec2_zero);
@@ -1361,7 +1384,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {18.0f, 115.0f};
-			g_camera.m_zoom = 5.5f;
+			g_camera.m_zoom = 25.0f * 5.5f;
 		}
 
 		float grid = 1.0f;
@@ -1451,3 +1474,58 @@ public:
 };
 
 static int sampleCompound = RegisterSample("Benchmark", "Compound", BenchmarkCompound::Create);
+
+class BenchmarkKinematic : public Sample
+{
+public:
+	explicit BenchmarkKinematic(Settings& settings)
+		: Sample(settings)
+	{
+		if (settings.restart == false)
+		{
+			g_camera.m_center = {0.0f, 0.0f};
+			g_camera.m_zoom = 150.0f;
+		}
+
+		float grid = 1.0f;
+
+#ifdef NDEBUG
+		int span = 100;
+#else
+		int span = 20;
+#endif
+
+		b2BodyDef bodyDef = b2DefaultBodyDef();
+		bodyDef.type = b2_kinematicBody;
+		bodyDef.angularVelocity = 1.0f;
+		// defer mass properties to avoid n-squared mass computations
+		bodyDef.automaticMass = false;
+
+		b2ShapeDef shapeDef = b2DefaultShapeDef();
+		shapeDef.filter.categoryBits = 1;
+		shapeDef.filter.maskBits = 2;
+
+		b2BodyId bodyId = b2CreateBody(m_worldId, &bodyDef);
+
+		for (int i = -span; i < span; ++i)
+		{
+			float y = i * grid;
+			for (int j = -span; j < span; ++j)
+			{
+				float x = j * grid;
+				b2Polygon square = b2MakeOffsetBox(0.5f * grid, 0.5f * grid, {x, y}, 0.0f);
+				b2CreatePolygonShape(bodyId, &shapeDef, &square);
+			}
+		}
+
+		// All shapes have been added so I can efficiently compute the mass properties.
+		b2Body_ApplyMassFromShapes(bodyId);
+	}
+
+	static Sample* Create(Settings& settings)
+	{
+		return new BenchmarkKinematic(settings);
+	}
+};
+
+static int sampleKinematic = RegisterSample("Benchmark", "Kinematic", BenchmarkKinematic::Create);

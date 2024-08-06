@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2022 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#include "car.h"
 #include "donut.h"
 #include "draw.h"
 #include "human.h"
@@ -8,9 +9,6 @@
 #include "settings.h"
 
 #include "box2d/box2d.h"
-#include "box2d/color.h"
-#include "box2d/geometry.h"
-#include "box2d/hull.h"
 #include "box2d/math_functions.h"
 
 #include <GLFW/glfw3.h>
@@ -35,7 +33,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = m_viewPosition;
-			g_camera.m_zoom = 1.0f;
+			g_camera.m_zoom = 25.0f * 1.0f;
 			settings.drawJoints = false;
 			settings.useCameraBounds = true;
 		}
@@ -115,39 +113,42 @@ public:
 			}
 			else if (remainder == 1)
 			{
-				b2Vec2 position = {xbase - 1.0f, 10.0f};
-				for (int i = 0; i < 3; ++i)
+				b2Vec2 position = {xbase - 2.0f, 10.0f};
+				for (int i = 0; i < 5; ++i)
 				{
 					// Abusing this class a bit since it doesn't allocate memory
 					Human human;
-					human.Spawn(m_worldId, position, 2.0f, humanIndex + 1, NULL);
+					human.Spawn(m_worldId, position, 1.5f, humanIndex + 1, NULL);
 					humanIndex += 1;
-					position.x += 0.75f;
+					position.x += 1.0f;
 				}
 			}
 			else
 			{
-				b2Vec2 position = {xbase - 6.0f, 12.0f};
+				b2Vec2 position = {xbase - 4.0f, 12.0f};
 
 				for (int i = 0; i < 5; ++i)
 				{
 					Donut donut;
-					donut.Spawn(m_worldId, position, donutIndex + 1, NULL);
+					donut.Spawn(m_worldId, position, 0.75f, 0, NULL);
 					donutIndex += 1;
-					position.x += 3.0f;
+					position.x += 2.0f;
 				}
 			}
 		}
+
+		m_car.Spawn(m_worldId, {xStart + 20.0f, 40.0f}, 10.0f, 2.0f, 0.7f, 2000.0f, nullptr);
 
 		m_cycleIndex = 0;
 		m_speed = 0.0f;
 		m_explosionPosition = {(0.5f + m_cycleIndex) * m_period + xStart, 7.0f};
 		m_explode = true;
+		m_followCar = false;
 	}
 
 	void UpdateUI() override
 	{
-		float height = 140.0f;
+		float height = 160.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
 		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
 
@@ -160,6 +161,7 @@ public:
 		}
 
 		ImGui::Checkbox("explode", &m_explode);
+		ImGui::Checkbox("follow car", &m_followCar);
 
 		ImGui::Text("world size = %g kilometers", m_gridSize * m_gridCount / 1000.0f);
 		ImGui::End();
@@ -183,6 +185,11 @@ public:
 			g_camera.m_center = m_viewPosition;
 		}
 
+		if (m_followCar)
+		{
+			g_camera.m_center.x = b2Body_GetPosition(m_car.m_chassisId).x;
+		}
+
 		float radius = 2.0f;
 		if ((m_stepCount & 0x1) == 0x1 && m_explode)
 		{
@@ -193,7 +200,22 @@ public:
 
 		if (m_explode)
 		{
-			g_draw.DrawCircle(m_explosionPosition, radius, b2_colorAzure3);
+			g_draw.DrawCircle(m_explosionPosition, radius, b2_colorAzure);
+		}
+
+		if (glfwGetKey(g_mainWindow, GLFW_KEY_A) == GLFW_PRESS)
+		{
+			m_car.SetSpeed(5.0f);
+		}
+
+		if (glfwGetKey(g_mainWindow, GLFW_KEY_S) == GLFW_PRESS)
+		{
+			m_car.SetSpeed(0.0f);
+		}
+
+		if (glfwGetKey(g_mainWindow, GLFW_KEY_D) == GLFW_PRESS)
+		{
+			m_car.SetSpeed(-5.0f);
 		}
 
 		Sample::Step(settings);
@@ -204,6 +226,7 @@ public:
 		return new LargeWorld(settings);
 	}
 
+	Car m_car;
 	b2Vec2 m_viewPosition;
 	float m_period;
 	int m_cycleCount;
@@ -214,6 +237,7 @@ public:
 
 	b2Vec2 m_explosionPosition;
 	bool m_explode;
+	bool m_followCar;
 };
 
 static int sampleLargeWorld = RegisterSample("World", "Large World", LargeWorld::Create);

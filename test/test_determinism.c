@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "box2d/box2d.h"
-#include "box2d/geometry.h"
 #include "box2d/math_functions.h"
 #include "box2d/types.h"
 #include "test_macros.h"
@@ -26,7 +25,7 @@ enum
 };
 
 b2Vec2 finalPositions[2][e_count];
-float finalAngles[2][e_count];
+b2Rot finalRotations[2][e_count];
 
 typedef struct TaskData
 {
@@ -163,7 +162,7 @@ void TiltedStacks(int testIndex, int workerCount)
 	for (int i = 0; i < e_count; ++i)
 	{
 		finalPositions[testIndex][i] = b2Body_GetPosition(bodies[i]);
-		finalAngles[testIndex][i] = b2Body_GetAngle(bodies[i]);
+		finalRotations[testIndex][i] = b2Body_GetRotation(bodies[i]);
 	}
 
 	b2DestroyWorld(worldId);
@@ -176,7 +175,7 @@ void TiltedStacks(int testIndex, int workerCount)
 	enkiDeleteTaskScheduler(scheduler);
 }
 
-// Test multi-threaded determinism.
+// Test multithreaded determinism.
 int DeterminismTest(void)
 {
 	// Test 1 : 4 threads
@@ -190,12 +189,13 @@ int DeterminismTest(void)
 	{
 		b2Vec2 p1 = finalPositions[0][i];
 		b2Vec2 p2 = finalPositions[1][i];
-		float a1 = finalAngles[0][i];
-		float a2 = finalAngles[1][i];
+		b2Rot rot1 = finalRotations[0][i];
+		b2Rot rot2 = finalRotations[1][i];
 
 		ENSURE(p1.x == p2.x);
 		ENSURE(p1.y == p2.y);
-		ENSURE(a1 == a2);
+		ENSURE(rot1.c == rot2.c);
+		ENSURE(rot1.s == rot2.s);
 	}
 
 	return 0;

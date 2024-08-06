@@ -9,11 +9,9 @@
 #include "sample.h"
 #include "settings.h"
 
-#include "box2d/api.h"
+#include "box2d/base.h"
 #include "box2d/box2d.h"
-#include "box2d/constants.h"
 #include "box2d/math_functions.h"
-#include "box2d/timer.h"
 
 #include <glad/glad.h>
 // Keep glad.h before glfw3.h
@@ -149,7 +147,7 @@ static void CreateUI(GLFWwindow* window, const char* glslVersion)
 	const char* fontPath = "samples/data/droid_sans.ttf";
 	FILE* file = fopen(fontPath, "rb");
 
-	if (fontPath)
+	if (file != NULL)
 	{
 		ImFontConfig fontConfig;
 		fontConfig.RasterizerMultiply = s_windowScale * s_framebufferScale;
@@ -158,8 +156,8 @@ static void CreateUI(GLFWwindow* window, const char* glslVersion)
 	}
 	else
 	{
-		printf("ERROR: must run Box2D samples working directory must be the top level Box2D directory (same as README.md)");
-		assert(false);
+		printf("\n\nERROR: the Box2D samples working directory must be the top level Box2D directory (same as README.md)\n\n");
+		exit(EXIT_FAILURE);
 	}
 }
 
@@ -399,7 +397,7 @@ static void UpdateUI()
 
 				if (ImGui::SliderInt("Workers", &s_settings.workerCount, 1, maxWorkers))
 				{
-					s_settings.workerCount = B2_CLAMP(s_settings.workerCount, 1, maxWorkers);
+					s_settings.workerCount = b2ClampInt(s_settings.workerCount, 1, maxWorkers);
 					RestartSample();
 				}
 				ImGui::PopItemWidth();
@@ -539,7 +537,7 @@ int main(int, char**)
 	char buffer[128];
 
 	s_settings.Load();
-	s_settings.workerCount = B2_MIN(8, (int)enki::GetNumHardwareThreads() / 2);
+	s_settings.workerCount = b2MinInt(8, (int)enki::GetNumHardwareThreads() / 2);
 	SortTests();
 
 	glfwSetErrorCallback(glfwErrorCallback);
@@ -567,7 +565,8 @@ int main(int, char**)
 	// MSAA
 	glfwWindowHint(GLFW_SAMPLES, 4);
 
-	snprintf(buffer, 128, "Box2D Version %d.%d.%d (alpha)", b2_version.major, b2_version.minor, b2_version.revision);
+	b2Version version = b2GetVersion();
+	snprintf(buffer, 128, "Box2D Version %d.%d.%d (beta)", version.major, version.minor, version.revision);
 
 	if (GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor())
 	{
@@ -624,10 +623,10 @@ int main(int, char**)
 	glfwSetScrollCallback(g_mainWindow, ScrollCallback);
 
 	// todo put this in s_settings
-	g_draw.Create();
 	CreateUI(g_mainWindow, glslVersion);
+	g_draw.Create();
 
-	s_settings.sampleIndex = B2_CLAMP(s_settings.sampleIndex, 0, g_sampleCount - 1);
+	s_settings.sampleIndex = b2ClampInt(s_settings.sampleIndex, 0, g_sampleCount - 1);
 	s_selection = s_settings.sampleIndex;
 	s_sample = g_sampleEntries[s_settings.sampleIndex].createFcn(s_settings);
 
@@ -644,12 +643,12 @@ int main(int, char**)
 		if (glfwGetKey(g_mainWindow, GLFW_KEY_Z) == GLFW_PRESS)
 		{
 			// Zoom out
-			g_camera.m_zoom = B2_MIN(1.005f * g_camera.m_zoom, 20.0f);
+			g_camera.m_zoom = b2MinFloat(1.005f * g_camera.m_zoom, 100.0f);
 		}
 		else if (glfwGetKey(g_mainWindow, GLFW_KEY_X) == GLFW_PRESS)
 		{
 			// Zoom in
-			g_camera.m_zoom = B2_MAX(0.995f * g_camera.m_zoom, 0.02f);
+			g_camera.m_zoom = b2MaxFloat(0.995f * g_camera.m_zoom, 0.5f);
 		}
 
 		glfwGetWindowSize(g_mainWindow, &g_camera.m_width, &g_camera.m_height);
@@ -726,6 +725,7 @@ int main(int, char**)
 			s_settings.sampleIndex = s_selection;
 
 			// #todo restore all drawing settings that may have been overridden by a sample
+			s_settings.subStepCount = 4;
 			s_settings.drawJoints = true;
 			s_settings.useCameraBounds = false;
 

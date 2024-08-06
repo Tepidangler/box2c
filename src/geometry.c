@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2023 Erin Catto
 // SPDX-License-Identifier: MIT
 
-#include "box2d/geometry.h"
-
 #include "aabb.h"
 #include "core.h"
 #include "shape.h"
 
-#include "box2d/distance.h"
-#include "box2d/hull.h"
+#include "box2d/collision.h"
 #include "box2d/math_functions.h"
 
 #include <float.h>
+#include <stddef.h>
+
+_Static_assert(b2_maxPolygonVertices > 2, "must be 3 or more");
 
 bool b2IsValidRay(const b2RayCastInput* input)
 {
@@ -56,7 +56,13 @@ static b2Vec2 b2ComputePolygonCentroid(const b2Vec2* vertices, int32_t count)
 
 b2Polygon b2MakePolygon(const b2Hull* hull, float radius)
 {
-	B2_ASSERT(hull->count >= 3);
+	B2_ASSERT(b2ValidateHull(hull));
+
+	if (hull->count < 3)
+	{
+		// Handle a bad hull when assertions are disabled
+		return b2MakeSquare(0.5f);
+	}
 
 	b2Polygon shape = {0};
 	shape.count = hull->count;
@@ -85,7 +91,13 @@ b2Polygon b2MakePolygon(const b2Hull* hull, float radius)
 
 b2Polygon b2MakeOffsetPolygon(const b2Hull* hull, float radius, b2Transform transform)
 {
-	B2_ASSERT(hull->count >= 3);
+	B2_ASSERT(b2ValidateHull(hull));
+
+	if (hull->count < 3)
+	{
+		// Handle a bad hull when assertions are disabled
+		return b2MakeSquare(0.5f);
+	}
 
 	b2Polygon shape = {0};
 	shape.count = hull->count;
@@ -189,7 +201,7 @@ b2MassData b2ComputeCircleMass(const b2Circle* shape, float density)
 	massData.center = shape->center;
 
 	// inertia about the local origin
-	massData.I = massData.mass * (0.5f * rr + b2Dot(shape->center, shape->center));
+	massData.rotationalInertia = massData.mass * (0.5f * rr + b2Dot(shape->center, shape->center));
 
 	return massData;
 }
@@ -228,10 +240,10 @@ b2MassData b2ComputeCapsuleMass(const b2Capsule* shape, float density)
 
 	float circleInertia = circleMass * (0.5f * rr + h * h + 2.0f * h * lc);
 	float boxInertia = boxMass * (4.0f * rr + ll) / 12.0f;
-	massData.I = circleInertia + boxInertia;
+	massData.rotationalInertia = circleInertia + boxInertia;
 
 	// inertia about the local origin
-	massData.I += massData.mass * b2Dot(massData.center, massData.center);
+	massData.rotationalInertia += massData.mass * b2Dot(massData.center, massData.center);
 
 	return massData;
 }
@@ -309,7 +321,7 @@ b2MassData b2ComputePolygonMass(const b2Polygon* shape, float density)
 
 	b2Vec2 center = {0.0f, 0.0f};
 	float area = 0.0f;
-	float I = 0.0f;
+	float rotationalInertia = 0.0f;
 
 	// Get a reference point for forming triangles.
 	// Use the first vertex to reduce round-off errors.
@@ -337,7 +349,7 @@ b2MassData b2ComputePolygonMass(const b2Polygon* shape, float density)
 		float intx2 = ex1 * ex1 + ex2 * ex1 + ex2 * ex2;
 		float inty2 = ey1 * ey1 + ey2 * ey1 + ey2 * ey2;
 
-		I += (0.25f * inv3 * D) * (intx2 + inty2);
+		rotationalInertia += (0.25f * inv3 * D) * (intx2 + inty2);
 	}
 
 	b2MassData massData;
@@ -353,10 +365,10 @@ b2MassData b2ComputePolygonMass(const b2Polygon* shape, float density)
 	massData.center = b2Add(r, center);
 
 	// Inertia tensor relative to the local origin (point s).
-	massData.I = density * I;
+	massData.rotationalInertia = density * rotationalInertia;
 
 	// Shift to center of mass then to original body origin.
-	massData.I += massData.mass * (b2Dot(massData.center, massData.center) - b2Dot(center, center));
+	massData.rotationalInertia += massData.mass * (b2Dot(massData.center, massData.center) - b2Dot(center, center));
 
 	return massData;
 }
@@ -442,7 +454,7 @@ bool b2PointInCapsule(b2Vec2 point, const b2Capsule* shape)
 	// dot(point - p1 - t * d, d) = 0
 	// t = dot(point - p1, d) / dot(d, d)
 	float t = b2Dot(b2Sub(point, p1), d) / dd;
-	t = B2_CLAMP(t, 0.0f, 1.0f);
+	t = b2ClampFloat(t, 0.0f, 1.0f);
 	b2Vec2 c = b2MulAdd(p1, t, d);
 
 	// Is query point within radius around closest point?
@@ -459,7 +471,7 @@ bool b2PointInPolygon(b2Vec2 point, const b2Polygon* shape)
 	input.useRadii = false;
 
 	b2DistanceCache cache = {0};
-	b2DistanceOutput output = b2ShapeDistance(&cache, &input);
+	b2DistanceOutput output = b2ShapeDistance(&cache, &input, NULL, 0);
 
 	return output.distance <= shape->radius;
 }

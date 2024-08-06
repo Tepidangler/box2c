@@ -8,9 +8,6 @@
 #include "settings.h"
 
 #include "box2d/box2d.h"
-#include "box2d/color.h"
-#include "box2d/geometry.h"
-#include "box2d/hull.h"
 #include "box2d/math_functions.h"
 
 #include <GLFW/glfw3.h>
@@ -32,9 +29,11 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 0.0f};
-			g_camera.m_zoom = 1.333f;
+			g_camera.m_zoom = 25.0f * 1.333f;
 		}
 		
+		settings.drawJoints = false;
+
 		{
 			b2BodyDef bodyDef = b2DefaultBodyDef();
 			b2BodyId groundId = b2CreateBody(m_worldId, &bodyDef);
@@ -171,7 +170,7 @@ public:
 		{
 			Donut* donut = m_donuts + index;
 			//donut->Spawn(m_worldId, center, index + 1, donut);
-			donut->Spawn(m_worldId, center, 0, donut);
+			donut->Spawn(m_worldId, center, 1.0f, 0, donut);
 		}
 		else
 		{
@@ -222,9 +221,9 @@ public:
 
 	void UpdateUI() override
 	{
-		float height = 100.0f;
+		float height = 90.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
+		ImGui::SetNextWindowSize(ImVec2(140.0f, height));
 
 		ImGui::Begin("Sensor Event", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
@@ -343,7 +342,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 0.0f};
-			g_camera.m_zoom = 1.75f;
+			g_camera.m_zoom = 25.0f * 1.75f;
 		}
 
 		{
@@ -367,6 +366,7 @@ public:
 			bodyDef.gravityScale = 0.0f;
 			bodyDef.linearDamping = 0.5f;
 			bodyDef.angularDamping = 0.5f;
+			bodyDef.isBullet = true;
 			m_playerId = b2CreateBody(m_worldId, &bodyDef);
 
 			b2Circle circle = {{0.0f, 0.0f}, 1.0f};
@@ -409,7 +409,7 @@ public:
 		b2BodyDef bodyDef = b2DefaultBodyDef();
 		bodyDef.type = b2_dynamicBody;
 		bodyDef.position = {RandomFloat(-38.0f, 38.0f), RandomFloat(-38.0f, 38.0f)};
-		bodyDef.angle = RandomFloat(-b2_pi, b2_pi);
+		bodyDef.rotation = b2MakeRot(RandomFloat(-b2_pi, b2_pi));
 		bodyDef.linearVelocity = {RandomFloat(-5.0f, 5.0f), RandomFloat(-5.0f, 5.0f)};
 		bodyDef.angularVelocity = RandomFloat(-1.0f, 1.0f);
 		bodyDef.gravityScale = 0.0f;
@@ -445,7 +445,7 @@ public:
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
 		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
 
-		ImGui::Begin("Sample Controls", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
+		ImGui::Begin("Contact Event", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
 		ImGui::SliderFloat("force", &m_force, 100.0f, 500.0f, "%.1f");
 
@@ -672,7 +672,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.5f, 7.5f};
-			g_camera.m_zoom = 0.4f;
+			g_camera.m_zoom = 25.0f * 0.4f;
 		}
 
 		b2World_SetPreSolveCallback(m_worldId, PreSolveStatic, this);
@@ -808,7 +808,7 @@ public:
 		if (m_jumpDelay == 0.0f && m_jumping == false && velocity.y < 0.01f)
 		{
 			int capacity = b2Body_GetContactCapacity(m_characterId);
-			capacity = B2_MIN(capacity, 4);
+			capacity = b2MinInt(capacity, 4);
 			b2ContactData contactData[4];
 			int count = b2Body_GetContactData(m_characterId, contactData, capacity);
 			for (int i = 0; i < count; ++i)
@@ -880,7 +880,7 @@ public:
 
 		if (settings.hertz > 0.0f)
 		{
-			m_jumpDelay = B2_MAX(0.0f, m_jumpDelay - 1.0f / settings.hertz);
+			m_jumpDelay = b2MaxFloat(0.0f, m_jumpDelay - 1.0f / settings.hertz);
 		}
 	}
 
@@ -915,8 +915,8 @@ public:
 	{
 		if (settings.restart == false)
 		{
-			g_camera.m_zoom = 0.55f;
 			g_camera.m_center = {2.0f, 8.0f};
+			g_camera.m_zoom = 25.0f * 0.55f;
 		}
 
 		{
@@ -1013,7 +1013,6 @@ public:
 		ImGui::End();
 	}
 
-
 	void Step(Settings& settings) override
 	{
 		if (settings.pause == false && (m_stepCount & 15) == 15 && m_count < e_count)
@@ -1051,7 +1050,7 @@ public:
 			}
 		}
 
-		g_draw.DrawCircle(m_explosionPosition, m_explosionRadius, b2_colorAzure3);
+		g_draw.DrawCircle(m_explosionPosition, m_explosionRadius, b2_colorAzure);
 
 		g_draw.DrawString(5, m_textLine, "sleep count: %d", m_sleepCount);
 		m_textLine += m_textIncrement;

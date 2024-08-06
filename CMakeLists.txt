@@ -16,12 +16,6 @@ message(STATUS "CMake C++ compiler: ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "CMake system name: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "CMake host system processor: ${CMAKE_HOST_SYSTEM_PROCESSOR}")
 
-option(BOX2D_USER_CONSTANTS "Generate user_constants.h" OFF)
-if(BOX2D_USER_CONSTANTS)
-	set(BOX2D_LENGTH_UNIT_PER_METER "1.0" CACHE STRING "Length units per meter")
-	set(BOX2D_MAX_POLYGON_VERTICES "8" CACHE STRING "Maximum number of polygon vertices (affects performance)")
-endif()
-
 if (MSVC OR APPLE)
 	option(BOX2D_SANITIZE "Enable sanitizers for some builds" OFF)
 	if(BOX2D_SANITIZE)
@@ -40,14 +34,15 @@ if (MSVC OR APPLE)
 	endif()
 endif()
 
-
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
 	option(BOX2D_AVX2 "Enable AVX2 (faster)" ON)
 endif()
 
-# Needed for samples.exe to find box2d.dll
-# set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+if(PROJECT_IS_TOP_LEVEL)
+	# Needed for samples.exe to find box2d.dll
+	# set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+endif()
 
 # C++17 needed for imgui
 set(CMAKE_CXX_STANDARD 17)
@@ -62,7 +57,7 @@ add_subdirectory(extern/simde)
 add_subdirectory(src)
 
 # This hides samples, test, and doxygen from apps that use box2d via FetchContent
-if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+if(PROJECT_IS_TOP_LEVEL)
 	option(BOX2D_SAMPLES "Build the Box2D samples" ON)
 	option(BOX2D_BENCHMARKS "Build the Box2D benchmarks" OFF)
 	option(BOX2D_DOCS "Build the Box2D documentation" OFF)

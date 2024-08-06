@@ -10,9 +10,25 @@
 
 // needed for dll export
 #include "box2d/box2d.h"
-#include "box2d/debug_draw.h"
 
 #include <stdio.h>
+
+void b2WheelJoint_EnableSpring(b2JointId jointId, bool enableSpring)
+{
+	b2JointSim* joint = b2GetJointSimCheckType(jointId, b2_wheelJoint);
+	
+	if (enableSpring != joint->wheelJoint.enableSpring)
+	{
+		joint->wheelJoint.enableSpring = enableSpring;
+		joint->wheelJoint.springImpulse = 0.0f;
+	}
+}
+
+bool b2WheelJoint_IsSpringEnabled(b2JointId jointId)
+{
+	b2JointSim* joint = b2GetJointSimCheckType(jointId, b2_wheelJoint);
+	return joint->wheelJoint.enableSpring;
+}
 
 void b2WheelJoint_SetSpringHertz(b2JointId jointId, float hertz)
 {
@@ -72,8 +88,8 @@ void b2WheelJoint_SetLimits(b2JointId jointId, float lower, float upper)
 	b2JointSim* joint = b2GetJointSimCheckType(jointId, b2_wheelJoint);
 	if (lower != joint->wheelJoint.lowerTranslation || upper != joint->wheelJoint.upperTranslation)
 	{
-		joint->wheelJoint.lowerTranslation = B2_MIN(lower, upper);
-		joint->wheelJoint.upperTranslation = B2_MAX(lower, upper);
+		joint->wheelJoint.lowerTranslation = b2MinFloat(lower, upper);
+		joint->wheelJoint.upperTranslation = b2MaxFloat(lower, upper);
 		joint->wheelJoint.lowerImpulse = 0.0f;
 		joint->wheelJoint.upperImpulse = 0.0f;
 	}
@@ -126,12 +142,8 @@ float b2WheelJoint_GetMaxMotorTorque(b2JointId jointId)
 	return joint->wheelJoint.maxMotorTorque;
 }
 
-b2Vec2 b2WheelJoint_GetConstraintForce(b2JointId jointId)
+b2Vec2 b2GetWheelJointForce(b2World* world, b2JointSim* base)
 {
-	b2World* world = b2GetWorld(jointId.world0);
-	b2JointSim* base = b2GetJointSimCheckType(jointId, b2_wheelJoint);
-	B2_ASSERT(base->type == b2_wheelJoint);
-
 	b2WheelJoint* joint = &base->wheelJoint;
 
 	// This is a frame behind
@@ -145,11 +157,9 @@ b2Vec2 b2WheelJoint_GetConstraintForce(b2JointId jointId)
 	return force;
 }
 
-float b2WheelJoint_GetConstraintTorque(b2JointId jointId)
+float b2GetWheelJointTorque(b2World* world, b2JointSim* base)
 {
-	b2World* world = b2GetWorld(jointId.world0);
-	b2JointSim* joint = b2GetJointSimCheckType(jointId, b2_wheelJoint);
-	return world->inv_h * joint->wheelJoint.motorImpulse;
+	return world->inv_h * base->wheelJoint.motorImpulse;
 }
 
 // Linear constraint (point-to-line)
@@ -202,9 +212,9 @@ void b2PrepareWheelJoint(b2JointSim* base, b2StepContext* context)
 	b2BodySim* bodySimB = setB->sims.data + bodyB->localIndex;
 
 	float mA = bodySimA->invMass;
-	float iA = bodySimA->invI;
+	float iA = bodySimA->invInertia;
 	float mB = bodySimB->invMass;
-	float iB = bodySimB->invI;
+	float iB = bodySimB->invInertia;
 
 	base->invMassA = mA;
 	base->invMassB = mB;
@@ -269,7 +279,7 @@ void b2WarmStartWheelJoint(b2JointSim* base, b2StepContext* context)
 	float iA = base->invIA;
 	float iB = base->invIB;
 
-	// dummy state for static sims
+	// dummy state for static bodies
 	b2BodyState dummyState = b2_identityBodyState;
 
 	b2WheelJoint* joint = &base->wheelJoint;
@@ -310,12 +320,12 @@ void b2SolveWheelJoint(b2JointSim* base, b2StepContext* context, bool useBias)
 	float iA = base->invIA;
 	float iB = base->invIB;
 
-	// dummy state for static sims
+	// dummy state for static bodies
 	b2BodyState dummyState = b2_identityBodyState;
 
 	b2WheelJoint* joint = &base->wheelJoint;
 
-	// This is a dummy body to represent a static body since static sims don't have a solver body.
+	// This is a dummy body to represent a static body since static bodies don't have a solver body.
 	b2BodyState dummyBody = {0};
 
 	b2BodyState* stateA = joint->indexA == B2_NULL_INDEX ? &dummyState : context->states + joint->indexA;
@@ -346,7 +356,7 @@ void b2SolveWheelJoint(b2JointSim* base, b2StepContext* context, bool useBias)
 		float impulse = -joint->motorMass * Cdot;
 		float oldImpulse = joint->motorImpulse;
 		float maxImpulse = context->h * joint->maxMotorTorque;
-		joint->motorImpulse = B2_CLAMP(joint->motorImpulse + impulse, -maxImpulse, maxImpulse);
+		joint->motorImpulse = b2ClampFloat(joint->motorImpulse + impulse, -maxImpulse, maxImpulse);
 		impulse = joint->motorImpulse - oldImpulse;
 
 		wA -= iA * impulse;
@@ -354,6 +364,7 @@ void b2SolveWheelJoint(b2JointSim* base, b2StepContext* context, bool useBias)
 	}
 
 	// spring constraint
+	if (joint->enableSpring)
 	{
 		// This is a real spring and should be applied even during relax
 		float C = translation;
@@ -401,7 +412,7 @@ void b2SolveWheelJoint(b2JointSim* base, b2StepContext* context, bool useBias)
 			float Cdot = b2Dot(axisA, b2Sub(vB, vA)) + a2 * wB - a1 * wA;
 			float impulse = -massScale * joint->axialMass * (Cdot + bias) - impulseScale * joint->lowerImpulse;
 			float oldImpulse = joint->lowerImpulse;
-			joint->lowerImpulse = B2_MAX(oldImpulse + impulse, 0.0f);
+			joint->lowerImpulse = b2MaxFloat(oldImpulse + impulse, 0.0f);
 			impulse = joint->lowerImpulse - oldImpulse;
 
 			b2Vec2 P = b2MulSV(impulse, axisA);
@@ -440,7 +451,7 @@ void b2SolveWheelJoint(b2JointSim* base, b2StepContext* context, bool useBias)
 			float Cdot = b2Dot(axisA, b2Sub(vA, vB)) + a1 * wA - a2 * wB;
 			float impulse = -massScale * joint->axialMass * (Cdot + bias) - impulseScale * joint->upperImpulse;
 			float oldImpulse = joint->upperImpulse;
-			joint->upperImpulse = B2_MAX(oldImpulse + impulse, 0.0f);
+			joint->upperImpulse = b2MaxFloat(oldImpulse + impulse, 0.0f);
 			impulse = joint->upperImpulse - oldImpulse;
 
 			b2Vec2 P = b2MulSV(impulse, axisA);
@@ -524,14 +535,13 @@ void b2DrawWheelJoint(b2DebugDraw* draw, b2JointSim* base, b2Transform transform
 
 	b2Vec2 pA = b2TransformPoint(transformA, base->localOriginAnchorA);
 	b2Vec2 pB = b2TransformPoint(transformB, base->localOriginAnchorB);
-
 	b2Vec2 axis = b2RotateVector(transformA.q, joint->localAxisA);
 
-	b2HexColor c1 = b2_colorGray70;
-	b2HexColor c2 = b2_colorGreen2;
-	b2HexColor c3 = b2_colorRed2;
-	b2HexColor c4 = b2_colorGray40;
-	b2HexColor c5 = b2_colorBlue2;
+	b2HexColor c1 = b2_colorGray7;
+	b2HexColor c2 = b2_colorGreen;
+	b2HexColor c3 = b2_colorRed;
+	b2HexColor c4 = b2_colorGray4;
+	b2HexColor c5 = b2_colorBlue;
 
 	draw->DrawSegment(pA, pB, c5, draw->context);
 
@@ -541,8 +551,8 @@ void b2DrawWheelJoint(b2DebugDraw* draw, b2JointSim* base, b2Transform transform
 		b2Vec2 upper = b2MulAdd(pA, joint->upperTranslation, axis);
 		b2Vec2 perp = b2LeftPerp(axis);
 		draw->DrawSegment(lower, upper, c1, draw->context);
-		draw->DrawSegment(b2MulSub(lower, 0.5f, perp), b2MulAdd(lower, 0.5f, perp), c2, draw->context);
-		draw->DrawSegment(b2MulSub(upper, 0.5f, perp), b2MulAdd(upper, 0.5f, perp), c3, draw->context);
+		draw->DrawSegment(b2MulSub(lower, 0.1f, perp), b2MulAdd(lower, 0.1f, perp), c2, draw->context);
+		draw->DrawSegment(b2MulSub(upper, 0.1f, perp), b2MulAdd(upper, 0.1f, perp), c3, draw->context);
 	}
 	else
 	{

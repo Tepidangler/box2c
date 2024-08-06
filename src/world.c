@@ -9,7 +9,6 @@
 #include "allocate.h"
 #include "array.h"
 #include "bitset.h"
-#include "block_allocator.h"
 #include "block_array.h"
 #include "body.h"
 #include "broad_phase.h"
@@ -23,21 +22,14 @@
 #include "solver.h"
 #include "solver_set.h"
 #include "stack_allocator.h"
-#include "util.h"
-
-// needed for dll export
-#include "box2d/box2d.h"
-#include "box2d/color.h"
-#include "box2d/constants.h"
-#include "box2d/debug_draw.h"
-#include "box2d/distance.h"
-#include "box2d/event_types.h"
-#include "box2d/timer.h"
 
 #include <float.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "box2d/box2d.h"
+
+_Static_assert(b2_maxWorlds > 0, "must be 1 or more");
 b2World b2_worlds[b2_maxWorlds];
 
 b2World* b2GetWorldFromId(b2WorldId id)
@@ -88,6 +80,7 @@ static void b2DefaultFinishTaskFcn(void* userTask, void* userContext)
 b2WorldId b2CreateWorld(const b2WorldDef* def)
 {
 	_Static_assert(b2_maxWorlds < UINT16_MAX, "b2_maxWorlds limit exceeded");
+	b2CheckDef(def);
 
 	int worldId = B2_NULL_INDEX;
 	for (int i = 0; i < b2_maxWorlds; ++i)
@@ -107,12 +100,14 @@ b2WorldId b2CreateWorld(const b2WorldDef* def)
 	b2InitializeContactRegisters();
 
 	b2World* world = b2_worlds + worldId;
+	uint16_t revision = world->revision;
+
 	*world = (b2World){0};
 
 	world->worldId = (uint16_t)worldId;
+	world->revision = revision;
 	world->inUse = true;
 
-	world->blockAllocator = b2CreateBlockAllocator();
 	world->stackAllocator = b2CreateStackAllocator(2048);
 	b2CreateBroadPhase(&world->broadPhase);
 	b2CreateGraph(&world->constraintGraph, 16);
@@ -161,12 +156,14 @@ b2WorldId b2CreateWorld(const b2WorldDef* def)
 	world->sensorEndEventArray = b2CreateArray(sizeof(b2SensorEndTouchEvent), 4);
 	world->contactBeginArray = b2CreateArray(sizeof(b2ContactBeginTouchEvent), 4);
 	world->contactEndArray = b2CreateArray(sizeof(b2ContactEndTouchEvent), 4);
+	world->contactHitArray = b2CreateArray(sizeof(b2ContactHitEvent), 4);
 
 	world->stepIndex = 0;
 	world->splitIslandId = B2_NULL_INDEX;
 	world->activeTaskCount = 0;
 	world->taskCount = 0;
 	world->gravity = def->gravity;
+	world->hitEventThreshold = def->hitEventThreshold;
 	world->restitutionThreshold = def->restitutionThreshold;
 	world->contactPushoutVelocity = def->contactPushoutVelocity;
 	world->contactHertz = def->contactHertz;
@@ -181,7 +178,7 @@ b2WorldId b2CreateWorld(const b2WorldDef* def)
 
 	if (def->workerCount > 0 && def->enqueueTask != NULL && def->finishTask != NULL)
 	{
-		world->workerCount = B2_MIN(def->workerCount, b2_maxWorkers);
+		world->workerCount = b2MinInt(def->workerCount, b2_maxWorkers);
 		world->enqueueTaskFcn = def->enqueueTask;
 		world->finishTaskFcn = def->finishTask;
 		world->userTaskContext = def->userTaskContext;
@@ -232,6 +229,7 @@ void b2DestroyWorld(b2WorldId worldId)
 	b2DestroyArray(world->sensorEndEventArray, sizeof(b2SensorEndTouchEvent));
 	b2DestroyArray(world->contactBeginArray, sizeof(b2ContactBeginTouchEvent));
 	b2DestroyArray(world->contactEndArray, sizeof(b2ContactEndTouchEvent));
+	b2DestroyArray(world->contactHitArray, sizeof(b2ContactHitEvent));
 
 	int chainCapacity = b2Array(world->chainArray).count;
 	for (int i = 0; i < chainCapacity; ++i)
@@ -269,7 +267,7 @@ void b2DestroyWorld(b2WorldId worldId)
 
 	b2DestroyArray(world->solverSetArray, sizeof(b2SolverSet));
 
-	b2DestroyGraph(&world->constraintGraph, &world->blockAllocator);
+	b2DestroyGraph(&world->constraintGraph);
 	b2DestroyBroadPhase(&world->broadPhase);
 
 	b2DestroyIdPool(&world->bodyIdPool);
@@ -280,7 +278,6 @@ void b2DestroyWorld(b2WorldId worldId)
 	b2DestroyIdPool(&world->islandIdPool);
 	b2DestroyIdPool(&world->solverSetIdPool);
 
-	b2DestroyBlockAllocator(&world->blockAllocator);
 	b2DestroyStackAllocator(&world->stackAllocator);
 
 	// Wipe world but preserve revision
@@ -334,11 +331,11 @@ static void b2CollideTask(int startIndex, int endIndex, uint32_t threadIndex, vo
 			// avoid cache misses in b2PrepareContactsTask
 			contactSim->bodySimIndexA = bodyA->setIndex == b2_awakeSet ? bodyA->localIndex : B2_NULL_INDEX;
 			contactSim->invMassA = bodySimA->invMass;
-			contactSim->invIA = bodySimA->invI;
+			contactSim->invIA = bodySimA->invInertia;
 
 			contactSim->bodySimIndexB = bodyB->setIndex == b2_awakeSet ? bodyB->localIndex : B2_NULL_INDEX;
 			contactSim->invMassB = bodySimB->invMass;
-			contactSim->invIB = bodySimB->invI;
+			contactSim->invIB = bodySimB->invInertia;
 
 			b2Transform transformA = bodySimA->transform;
 			b2Transform transformB = bodySimB->transform;
@@ -346,12 +343,11 @@ static void b2CollideTask(int startIndex, int endIndex, uint32_t threadIndex, vo
 			b2Vec2 centerOffsetA = b2RotateVector(transformA.q, bodySimA->localCenter);
 			b2Vec2 centerOffsetB = b2RotateVector(transformB.q, bodySimB->localCenter);
 
+			// This updates solid contacts and sensors
 			bool touching =
 				b2UpdateContact(world, contactSim, shapeA, transformA, centerOffsetA, shapeB, transformB, centerOffsetB);
 
-			// Move
-
-			// State changes that affect island connectivity
+			// State changes that affect island connectivity. Also contact and sensor events.
 			if (touching == true && wasTouching == false)
 			{
 				contactSim->simFlags |= b2_simStartedTouching;
@@ -389,7 +385,7 @@ static void b2AddNonTouchingContact(b2World* world, b2Contact* contact, b2Contac
 	contact->colorIndex = B2_NULL_INDEX;
 	contact->localIndex = set->contacts.count;
 
-	b2ContactSim* newContactSim = b2AddContact(&world->blockAllocator, &set->contacts);
+	b2ContactSim* newContactSim = b2AddContact(&set->contacts);
 	memcpy(newContactSim, contactSim, sizeof(b2ContactSim));
 }
 
@@ -420,7 +416,7 @@ static void b2Collide(b2StepContext* context)
 	b2TracyCZoneNC(collide, "Collide", b2_colorDarkOrchid, true);
 
 	// Tasks that can be done in parallel with the narrow-phase
-	// - rebuild the collision tree for dynamic and kinematic sims to keep their query performance good
+	// - rebuild the collision tree for dynamic and kinematic bodies to keep their query performance good
 	world->userTreeTask = world->enqueueTaskFcn(&b2UpdateTreesTask, 1, 1, world, world->userTaskContext);
 	world->taskCount += 1;
 	world->activeTaskCount += world->userTreeTask == NULL ? 0 : 1;
@@ -565,6 +561,7 @@ static void b2Collide(b2StepContext* context)
 				B2_ASSERT(contact->islandId == B2_NULL_INDEX);
 				if ((flags & b2_contactSensorFlag) != 0)
 				{
+					// Contact is a sensor
 					if ((flags & b2_contactEnableSensorEvents) != 0)
 					{
 						if (shapeA->isSensor)
@@ -581,10 +578,11 @@ static void b2Collide(b2StepContext* context)
 					}
 
 					contactSim->simFlags &= ~b2_simStartedTouching;
-					contact->flags |= b2_contactTouchingFlag;
+					contact->flags |= b2_contactSensorTouchingFlag;
 				}
 				else
 				{
+					// Contact is solid
 					if (flags & b2_contactEnableContactEvents)
 					{
 						b2ContactBeginTouchEvent event = {shapeIdA, shapeIdB};
@@ -618,10 +616,12 @@ static void b2Collide(b2StepContext* context)
 			else if (simFlags & b2_simStoppedTouching)
 			{
 				contactSim->simFlags &= ~b2_simStoppedTouching;
-				contact->flags &= ~b2_contactTouchingFlag;
 
 				if ((flags & b2_contactSensorFlag) != 0)
 				{
+					// Contact is a sensor
+					contact->flags &= ~b2_contactSensorTouchingFlag;
+
 					if ((flags & b2_contactEnableSensorEvents) != 0)
 					{
 						if (shapeA->isSensor)
@@ -636,9 +636,13 @@ static void b2Collide(b2StepContext* context)
 							b2Array_Push(world->sensorEndEventArray, event);
 						}
 					}
+
 				}
 				else
 				{
+					// Contact is solid
+					contact->flags &= ~b2_contactTouchingFlag;
+
 					if (contact->flags & b2_contactEnableContactEvents)
 					{
 						b2ContactEndTouchEvent event = {shapeIdA, shapeIdB};
@@ -656,10 +660,6 @@ static void b2Collide(b2StepContext* context)
 					contact = NULL;
 					contactSim = NULL;
 				}
-			}
-
-			{
-				// todo hit events
 			}
 
 			// Clear the smallest set bit
@@ -690,6 +690,7 @@ void b2World_Step(b2WorldId worldId, float timeStep, int subStepCount)
 	b2Array_Clear(world->sensorEndEventArray);
 	b2Array_Clear(world->contactBeginArray);
 	b2Array_Clear(world->contactEndArray);
+	b2Array_Clear(world->contactHitArray);
 
 	world->profile = (b2Profile){0};
 
@@ -717,7 +718,7 @@ void b2World_Step(b2WorldId worldId, float timeStep, int subStepCount)
 	b2StepContext context = {0};
 	context.world = world;
 	context.dt = timeStep;
-	context.subStepCount = B2_MAX(1, subStepCount);
+	context.subStepCount = b2MaxInt(1, subStepCount);
 
 	if (timeStep > 0.0f)
 	{
@@ -735,8 +736,8 @@ void b2World_Step(b2WorldId worldId, float timeStep, int subStepCount)
 	world->inv_h = context.inv_h;
 
 	// Hertz values get reduced for large time steps
-	float contactHertz = B2_MIN(world->contactHertz, 0.25f * context.inv_h);
-	float jointHertz = B2_MIN(world->jointHertz, 0.125f * context.inv_h);
+	float contactHertz = b2MinFloat(world->contactHertz, 0.25f * context.inv_h);
+	float jointHertz = b2MinFloat(world->jointHertz, 0.125f * context.inv_h);
 
 	context.contactSoftness = b2MakeSoft(contactHertz, world->contactDampingRatio, context.h);
 	context.staticSoftness = b2MakeSoft(2.0f * contactHertz, world->contactDampingRatio, context.h);
@@ -819,7 +820,7 @@ static void b2DrawShape(b2DebugDraw* draw, b2Shape* shape, b2Transform xf, b2Hex
 			b2Vec2 p2 = b2TransformPoint(xf, segment->point2);
 			draw->DrawSegment(p1, p2, color, draw->context);
 			draw->DrawPoint(p2, 4.0f, color, draw->context);
-			draw->DrawSegment(p1, b2Lerp(p1, p2, 0.1f), b2_colorPaleGreen4, draw->context);
+			draw->DrawSegment(p1, b2Lerp(p1, p2, 0.1f), b2_colorPaleGreen, draw->context);
 		}
 		break;
 
@@ -862,11 +863,15 @@ static bool DrawQueryCallback(int proxyId, int shapeId, void* context)
 		}
 		else if (body->setIndex == b2_disabledSet)
 		{
-			color = b2_colorSlateGray2;
+			color = b2_colorSlateGray;
 		}
 		else if (shape->isSensor)
 		{
 			color = b2_colorWheat;
+		}
+		else if (bodySim->isBullet && body->setIndex == b2_awakeSet)
+		{
+			color = b2_colorTurquoise;
 		}
 		else if (body->isSpeedCapped)
 		{
@@ -886,7 +891,7 @@ static bool DrawQueryCallback(int proxyId, int shapeId, void* context)
 		}
 		else if (body->setIndex == b2_awakeSet)
 		{
-			color = b2_colorPink3;
+			color = b2_colorPink;
 		}
 		else
 		{
@@ -905,26 +910,27 @@ static bool DrawQueryCallback(int proxyId, int shapeId, void* context)
 						{aabb.upperBound.x, aabb.upperBound.y},
 						{aabb.lowerBound.x, aabb.upperBound.y}};
 
-		draw->DrawPolygon(vs, 4, b2_colorGold2, draw->context);
+		draw->DrawPolygon(vs, 4, b2_colorGold, draw->context);
 	}
 
 	return true;
 }
 
 // todo this has varying order for moving shapes, causing flicker when overlapping shapes are moving
+// solution: display order by shape id modulus 3, keep 3 buckets in GLSolid* and flush in 3 passes.
 static void b2DrawWithBounds(b2World* world, b2DebugDraw* draw)
 {
 	B2_ASSERT(b2AABB_IsValid(draw->drawingBounds));
 
 	const float k_impulseScale = 1.0f;
 	const float k_axisScale = 0.3f;
-	b2HexColor speculativeColor = b2_colorGray30;
-	b2HexColor addColor = b2_colorGreen1;
-	b2HexColor persistColor = b2_colorBlue1;
-	b2HexColor normalColor = b2_colorGray90;
+	b2HexColor speculativeColor = b2_colorGray3;
+	b2HexColor addColor = b2_colorGreen;
+	b2HexColor persistColor = b2_colorBlue;
+	b2HexColor normalColor = b2_colorGray9;
 	b2HexColor impulseColor = b2_colorMagenta;
-	b2HexColor frictionColor = b2_colorYellow2;
-	
+	b2HexColor frictionColor = b2_colorYellow;
+
 	b2HexColor graphColors[b2_graphColorCount] = {b2_colorRed,		 b2_colorOrange,	b2_colorYellow, b2_colorGreen,
 												  b2_colorCyan,		 b2_colorBlue,		b2_colorViolet, b2_colorPink,
 												  b2_colorChocolate, b2_colorGoldenrod, b2_colorCoral,	b2_colorBlack};
@@ -940,9 +946,9 @@ static void b2DrawWithBounds(b2World* world, b2DebugDraw* draw)
 
 	struct DrawContext drawContext = {world, draw};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
-		b2DynamicTree_Query(world->broadPhase.trees + i, draw->drawingBounds, DrawQueryCallback, &drawContext);
+		b2DynamicTree_Query(world->broadPhase.trees + i, draw->drawingBounds, b2_defaultMaskBits, DrawQueryCallback, &drawContext);
 	}
 
 	uint32_t wordCount = world->debugBodySet.blockCount;
@@ -998,6 +1004,7 @@ static void b2DrawWithBounds(b2World* world, b2DebugDraw* draw)
 				}
 			}
 
+			const float linearSlop = b2_linearSlop;
 			if (draw->drawContacts && body->type == b2_dynamicBody && body->setIndex == b2_awakeSet)
 			{
 				int contactKey = body->headContactKey;
@@ -1034,11 +1041,10 @@ static void b2DrawWithBounds(b2World* world, b2DebugDraw* draw)
 							{
 								// graph color
 								float pointSize = contact->colorIndex == b2_overflowIndex ? 7.5f : 5.0f;
-								draw->DrawPoint(point->point, pointSize, graphColors[contact->colorIndex],
-												draw->context);
+								draw->DrawPoint(point->point, pointSize, graphColors[contact->colorIndex], draw->context);
 								// g_draw.DrawString(point->position, "%d", point->color);
 							}
-							else if (point->separation > b2_linearSlop)
+							else if (point->separation > linearSlop)
 							{
 								// Speculative
 								draw->DrawPoint(point->point, 5.0f, speculativeColor, draw->context);
@@ -1142,11 +1148,15 @@ void b2World_Draw(b2WorldId worldId, b2DebugDraw* draw)
 					}
 					else if (body->setIndex == b2_disabledSet)
 					{
-						color = b2_colorSlateGray2;
+						color = b2_colorSlateGray;
 					}
 					else if (shape->isSensor)
 					{
 						color = b2_colorWheat;
+					}
+					else if (bodySim->isBullet && body->setIndex == b2_awakeSet)
+					{
+						color = b2_colorTurquoise;
 					}
 					else if (body->isSpeedCapped)
 					{
@@ -1166,7 +1176,7 @@ void b2World_Draw(b2WorldId worldId, b2DebugDraw* draw)
 					}
 					else if (body->setIndex == b2_awakeSet)
 					{
-						color = b2_colorPink3;
+						color = b2_colorPink;
 					}
 					else
 					{
@@ -1197,7 +1207,7 @@ void b2World_Draw(b2WorldId worldId, b2DebugDraw* draw)
 
 	if (draw->drawAABBs)
 	{
-		b2HexColor color = b2_colorGold2;
+		b2HexColor color = b2_colorGold;
 
 		int setCount = b2Array(world->solverSetArray).count;
 		for (int setIndex = 0; setIndex < setCount; ++setIndex)
@@ -1263,12 +1273,14 @@ void b2World_Draw(b2WorldId worldId, b2DebugDraw* draw)
 	{
 		const float k_impulseScale = 1.0f;
 		const float k_axisScale = 0.3f;
-		b2HexColor speculativeColor = b2_colorGray30;
-		b2HexColor addColor = b2_colorGreen1;
-		b2HexColor persistColor = b2_colorBlue1;
-		b2HexColor normalColor = b2_colorGray90;
+		const float linearSlop = b2_linearSlop;
+
+		b2HexColor speculativeColor = b2_colorGray3;
+		b2HexColor addColor = b2_colorGreen;
+		b2HexColor persistColor = b2_colorBlue;
+		b2HexColor normalColor = b2_colorGray9;
 		b2HexColor impulseColor = b2_colorMagenta;
-		b2HexColor frictionColor = b2_colorYellow2;
+		b2HexColor frictionColor = b2_colorYellow;
 
 		b2HexColor colors[b2_graphColorCount] = {b2_colorRed,		b2_colorOrange,	   b2_colorYellow, b2_colorGreen,
 												 b2_colorCyan,		b2_colorBlue,	   b2_colorViolet, b2_colorPink,
@@ -1297,7 +1309,7 @@ void b2World_Draw(b2WorldId worldId, b2DebugDraw* draw)
 						draw->DrawPoint(point->point, pointSize, colors[colorIndex], draw->context);
 						// g_draw.DrawString(point->position, "%d", point->color);
 					}
-					else if (point->separation > b2_linearSlop)
+					else if (point->separation > linearSlop)
 					{
 						// Speculative
 						draw->DrawPoint(point->point, 5.0f, speculativeColor, draw->context);
@@ -1384,8 +1396,11 @@ b2ContactEvents b2World_GetContactEvents(b2WorldId worldId)
 
 	int beginCount = b2Array(world->contactBeginArray).count;
 	int endCount = b2Array(world->contactEndArray).count;
+	int hitCount = b2Array(world->contactHitArray).count;
 
-	b2ContactEvents events = {world->contactBeginArray, world->contactEndArray, beginCount, endCount};
+	b2ContactEvents events = {
+		world->contactBeginArray, world->contactEndArray, world->contactHitArray, beginCount, endCount, hitCount};
+
 	return events;
 }
 
@@ -1605,7 +1620,19 @@ void b2World_SetRestitutionThreshold(b2WorldId worldId, float value)
 		return;
 	}
 
-	world->restitutionThreshold = B2_CLAMP(value, 0.0f, FLT_MAX);
+	world->restitutionThreshold = b2ClampFloat(value, 0.0f, FLT_MAX);
+}
+
+void b2World_SetHitEventThreshold(b2WorldId worldId, float value)
+{
+	b2World* world = b2GetWorldFromId(worldId);
+	B2_ASSERT(world->locked == false);
+	if (world->locked)
+	{
+		return;
+	}
+
+	world->hitEventThreshold = b2ClampFloat(value, 0.0f, FLT_MAX);
 }
 
 void b2World_SetContactTuning(b2WorldId worldId, float hertz, float dampingRatio, float pushOut)
@@ -1617,9 +1644,9 @@ void b2World_SetContactTuning(b2WorldId worldId, float hertz, float dampingRatio
 		return;
 	}
 
-	world->contactHertz = B2_CLAMP(hertz, 0.0f, FLT_MAX);
-	world->contactDampingRatio = B2_CLAMP(dampingRatio, 0.0f, FLT_MAX);
-	world->contactPushoutVelocity = B2_CLAMP(pushOut, 0.0f, FLT_MAX);
+	world->contactHertz = b2ClampFloat(hertz, 0.0f, FLT_MAX);
+	world->contactDampingRatio = b2ClampFloat(dampingRatio, 0.0f, FLT_MAX);
+	world->contactPushoutVelocity = b2ClampFloat(pushOut, 0.0f, FLT_MAX);
 }
 
 b2Profile b2World_GetProfile(b2WorldId worldId)
@@ -1638,15 +1665,17 @@ b2Counters b2World_GetCounters(b2WorldId worldId)
 	s.jointCount = b2GetIdCount(&world->jointIdPool);
 	s.islandCount = b2GetIdCount(&world->islandIdPool);
 
-	b2DynamicTree* staticTree = world->broadPhase.trees + b2_staticProxy;
+	b2DynamicTree* staticTree = world->broadPhase.trees + b2_staticBody;
 	s.staticTreeHeight = b2DynamicTree_GetHeight(staticTree);
 
-	b2DynamicTree* tree = world->broadPhase.trees + b2_movableProxy;
-	s.treeHeight = b2DynamicTree_GetHeight(tree);
+	b2DynamicTree* dynamicTree = world->broadPhase.trees + b2_dynamicBody;
+	b2DynamicTree* kinematicTree = world->broadPhase.trees + b2_kinematicBody;
+	s.treeHeight = b2MaxInt(b2DynamicTree_GetHeight(dynamicTree), b2DynamicTree_GetHeight(kinematicTree));
 
 	s.stackUsed = b2GetMaxStackAllocation(&world->stackAllocator);
 	s.byteCount = b2GetByteCount();
 	s.taskCount = world->taskCount;
+
 	for (int i = 0; i < b2_graphColorCount; ++i)
 	{
 		s.colorCounts[i] = world->constraintGraph.colors[i].contacts.count + world->constraintGraph.colors[i].joints.count;
@@ -1688,8 +1717,9 @@ void b2World_DumpMemoryStats(b2WorldId worldId)
 
 	// broad-phase
 	fprintf(file, "broad-phase\n");
-	fprintf(file, "static tree: %d\n", b2DynamicTree_GetByteCount(world->broadPhase.trees + b2_staticProxy));
-	fprintf(file, "movable tree: %d\n", b2DynamicTree_GetByteCount(world->broadPhase.trees + b2_movableProxy));
+	fprintf(file, "static tree: %d\n", b2DynamicTree_GetByteCount(world->broadPhase.trees + b2_staticBody));
+	fprintf(file, "kinematic tree: %d\n", b2DynamicTree_GetByteCount(world->broadPhase.trees + b2_kinematicBody));
+	fprintf(file, "dynamic tree: %d\n", b2DynamicTree_GetByteCount(world->broadPhase.trees + b2_dynamicBody));
 	b2HashSet* moveSet = &world->broadPhase.moveSet;
 	fprintf(file, "moveSet: %d (%d, %d)\n", b2GetHashSetBytes(moveSet), moveSet->count, moveSet->capacity);
 	fprintf(file, "moveArray: %d\n", b2GetArrayBytes(world->broadPhase.moveArray, sizeof(int)));
@@ -1798,9 +1828,9 @@ void b2World_OverlapAABB(b2WorldId worldId, b2AABB aabb, b2QueryFilter filter, b
 
 	WorldQueryContext worldContext = {world, fcn, filter, context};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
-		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, TreeQueryCallback, &worldContext);
+		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, filter.maskBits, TreeQueryCallback, &worldContext);
 	}
 }
 
@@ -1843,7 +1873,7 @@ static bool TreeOverlapCallback(int proxyId, int shapeId, void* context)
 	input.useRadii = true;
 
 	b2DistanceCache cache = {0};
-	b2DistanceOutput output = b2ShapeDistance(&cache, &input);
+	b2DistanceOutput output = b2ShapeDistance(&cache, &input, NULL, 0);
 
 	if (output.distance > 0.0f)
 	{
@@ -1873,9 +1903,9 @@ void b2World_OverlapCircle(b2WorldId worldId, const b2Circle* circle, b2Transfor
 		world, fcn, filter, b2MakeProxy(&circle->center, 1, circle->radius), transform, context,
 	};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
-		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, TreeOverlapCallback, &worldContext);
+		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, filter.maskBits, TreeOverlapCallback, &worldContext);
 	}
 }
 
@@ -1897,9 +1927,9 @@ void b2World_OverlapCapsule(b2WorldId worldId, const b2Capsule* capsule, b2Trans
 		world, fcn, filter, b2MakeProxy(&capsule->center1, 2, capsule->radius), transform, context,
 	};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
-		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, TreeOverlapCallback, &worldContext);
+		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, filter.maskBits, TreeOverlapCallback, &worldContext);
 	}
 }
 
@@ -1921,9 +1951,9 @@ void b2World_OverlapPolygon(b2WorldId worldId, const b2Polygon* polygon, b2Trans
 		world, fcn, filter, b2MakeProxy(polygon->vertices, polygon->count, polygon->radius), transform, context,
 	};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
-		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, TreeOverlapCallback, &worldContext);
+		b2DynamicTree_Query(world->broadPhase.trees + i, aabb, filter.maskBits, TreeOverlapCallback, &worldContext);
 	}
 }
 
@@ -1968,7 +1998,7 @@ static float RayCastCallback(const b2RayCastInput* input, int proxyId, int shape
 	return input->maxFraction;
 }
 
-void b2World_RayCast(b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2QueryFilter filter, b2CastResultFcn* fcn,
+void b2World_CastRay(b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2QueryFilter filter, b2CastResultFcn* fcn,
 					 void* context)
 {
 	b2World* world = b2GetWorldFromId(worldId);
@@ -1985,7 +2015,7 @@ void b2World_RayCast(b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2Que
 
 	WorldRayCastContext worldContext = {world, fcn, filter, 1.0f, context};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
 		b2DynamicTree_RayCast(world->broadPhase.trees + i, &input, filter.maskBits, RayCastCallback, &worldContext);
 
@@ -2010,7 +2040,7 @@ static float b2RayCastClosestFcn(b2ShapeId shapeId, b2Vec2 point, b2Vec2 normal,
 	return fraction;
 }
 
-b2RayResult b2World_RayCastClosest(b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2QueryFilter filter)
+b2RayResult b2World_CastRayClosest(b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2QueryFilter filter)
 {
 	b2RayResult result = {0};
 
@@ -2027,7 +2057,7 @@ b2RayResult b2World_RayCastClosest(b2WorldId worldId, b2Vec2 origin, b2Vec2 tran
 	b2RayCastInput input = {origin, translation, 1.0f};
 	WorldRayCastContext worldContext = {world, b2RayCastClosestFcn, filter, 1.0f, &result};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
 		b2DynamicTree_RayCast(world->broadPhase.trees + i, &input, filter.maskBits, RayCastCallback, &worldContext);
 
@@ -2074,7 +2104,7 @@ static float ShapeCastCallback(const b2ShapeCastInput* input, int proxyId, int s
 	return input->maxFraction;
 }
 
-void b2World_CircleCast(b2WorldId worldId, const b2Circle* circle, b2Transform originTransform, b2Vec2 translation,
+void b2World_CastCircle(b2WorldId worldId, const b2Circle* circle, b2Transform originTransform, b2Vec2 translation,
 						b2QueryFilter filter, b2CastResultFcn* fcn, void* context)
 {
 	b2World* world = b2GetWorldFromId(worldId);
@@ -2097,7 +2127,7 @@ void b2World_CircleCast(b2WorldId worldId, const b2Circle* circle, b2Transform o
 
 	WorldRayCastContext worldContext = {world, fcn, filter, 1.0f, context};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
 		b2DynamicTree_ShapeCast(world->broadPhase.trees + i, &input, filter.maskBits, ShapeCastCallback, &worldContext);
 
@@ -2110,7 +2140,7 @@ void b2World_CircleCast(b2WorldId worldId, const b2Circle* circle, b2Transform o
 	}
 }
 
-void b2World_CapsuleCast(b2WorldId worldId, const b2Capsule* capsule, b2Transform originTransform, b2Vec2 translation,
+void b2World_CastCapsule(b2WorldId worldId, const b2Capsule* capsule, b2Transform originTransform, b2Vec2 translation,
 						 b2QueryFilter filter, b2CastResultFcn* fcn, void* context)
 {
 	b2World* world = b2GetWorldFromId(worldId);
@@ -2134,7 +2164,7 @@ void b2World_CapsuleCast(b2WorldId worldId, const b2Capsule* capsule, b2Transfor
 
 	WorldRayCastContext worldContext = {world, fcn, filter, 1.0f, context};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
 		b2DynamicTree_ShapeCast(world->broadPhase.trees + i, &input, filter.maskBits, ShapeCastCallback, &worldContext);
 
@@ -2147,7 +2177,7 @@ void b2World_CapsuleCast(b2WorldId worldId, const b2Capsule* capsule, b2Transfor
 	}
 }
 
-void b2World_PolygonCast(b2WorldId worldId, const b2Polygon* polygon, b2Transform originTransform, b2Vec2 translation,
+void b2World_CastPolygon(b2WorldId worldId, const b2Polygon* polygon, b2Transform originTransform, b2Vec2 translation,
 						 b2QueryFilter filter, b2CastResultFcn* fcn, void* context)
 {
 	b2World* world = b2GetWorldFromId(worldId);
@@ -2173,7 +2203,7 @@ void b2World_PolygonCast(b2WorldId worldId, const b2Polygon* polygon, b2Transfor
 
 	WorldRayCastContext worldContext = {world, fcn, filter, 1.0f, context};
 
-	for (int i = 0; i < b2_proxyTypeCount; ++i)
+	for (int i = 0; i < b2_bodyTypeCount; ++i)
 	{
 		b2DynamicTree_ShapeCast(world->broadPhase.trees + i, &input, filter.maskBits, ShapeCastCallback, &worldContext);
 
@@ -2276,6 +2306,13 @@ void b2World_Dump()
 }
 #endif
 
+void b2World_SetCustomFilterCallback(b2WorldId worldId, b2CustomFilterFcn* fcn, void* context)
+{
+	b2World* world = b2GetWorldFromId(worldId);
+	world->customFilterFcn = fcn;
+	world->customFilterContext = context;
+}
+
 void b2World_SetPreSolveCallback(b2WorldId worldId, b2PreSolveFcn* fcn, void* context)
 {
 	b2World* world = b2GetWorldFromId(worldId);
@@ -2337,7 +2374,7 @@ static bool ExplosionCallback(int proxyId, int shapeId, void* context)
 	input.useRadii = true;
 
 	b2DistanceCache cache = {0};
-	b2DistanceOutput output = b2ShapeDistance(&cache, &input);
+	b2DistanceOutput output = b2ShapeDistance(&cache, &input, NULL, 0);
 
 	if (output.distance > explosionContext->radius)
 	{
@@ -2365,7 +2402,7 @@ static bool ExplosionCallback(int proxyId, int shapeId, void* context)
 	b2BodyState* state = set->states.data + localIndex;
 	b2BodySim* bodySim = set->sims.data + localIndex;
 	state->linearVelocity = b2MulAdd(state->linearVelocity, bodySim->invMass, impulse);
-	state->angularVelocity += bodySim->invI * b2Cross(b2Sub(closestPoint, bodySim->center), impulse);
+	state->angularVelocity += bodySim->invInertia * b2Cross(b2Sub(closestPoint, bodySim->center), impulse);
 
 	return true;
 }
@@ -2391,7 +2428,7 @@ void b2World_Explode(b2WorldId worldId, b2Vec2 position, float radius, float mag
 	aabb.upperBound.x = position.x + radius;
 	aabb.upperBound.y = position.y + radius;
 
-	b2DynamicTree_Query(world->broadPhase.trees + b2_movableProxy, aabb, ExplosionCallback, &explosionContext);
+	b2DynamicTree_Query(world->broadPhase.trees + b2_dynamicBody, aabb, b2_defaultMaskBits, ExplosionCallback, &explosionContext);
 }
 
 #if B2_VALIDATE
@@ -2585,11 +2622,12 @@ void b2ValidateSolverSets(b2World* world)
 						}
 						else if (setIndex == b2_staticSet)
 						{
-							B2_ASSERT(B2_PROXY_TYPE(shape->proxyKey) == b2_staticProxy);
+							B2_ASSERT(B2_PROXY_TYPE(shape->proxyKey) == b2_staticBody);
 						}
 						else
 						{
-							B2_ASSERT(B2_PROXY_TYPE(shape->proxyKey) == b2_movableProxy);
+							b2BodyType proxyType = B2_PROXY_TYPE(shape->proxyKey);
+							B2_ASSERT(proxyType == b2_kinematicBody || proxyType == b2_dynamicBody);
 						}
 
 						prevShapeId = shapeId;
@@ -2860,13 +2898,18 @@ void b2ValidateContacts(b2World* world)
 		allocatedContactCount += 1;
 
 		bool touching = (contact->flags & b2_contactTouchingFlag) != 0;
+		bool sensorTouching = (contact->flags & b2_contactSensorTouchingFlag) != 0;
+		bool isSensor = (contact->flags & b2_contactSensorFlag) != 0;
+
+		B2_ASSERT(touching == false || sensorTouching == false);
+		B2_ASSERT(touching == false || isSensor == false);
 
 		int setId = contact->setIndex;
 
 		if (setId == b2_awakeSet)
 		{
 			// If touching and not a sensor
-			if (touching && (contact->flags & b2_contactSensorFlag) == 0)
+			if (touching && isSensor == false)
 			{
 				B2_ASSERT(0 <= contact->colorIndex && contact->colorIndex < b2_graphColorCount);
 			}
@@ -2878,11 +2921,11 @@ void b2ValidateContacts(b2World* world)
 		else if (setId >= b2_firstSleepingSet)
 		{
 			// Only touching contacts allowed in a sleeping set
-			B2_ASSERT(touching == true);
+			B2_ASSERT(touching == true && isSensor == false);
 		}
 		else
 		{
-			// Sleeping and non-touching contacts belong in the disabled set
+			// Sleeping and non-touching contacts or sensor contacts belong in the disabled set
 			B2_ASSERT(touching == false && setId == b2_disabledSet);
 		}
 
@@ -2891,10 +2934,10 @@ void b2ValidateContacts(b2World* world)
 		B2_ASSERT(contactSim->bodyIdA == contact->edges[0].bodyId);
 		B2_ASSERT(contactSim->bodyIdB == contact->edges[1].bodyId);
 
+		// Sim touching is true for solid and sensor contacts
 		bool simTouching = (contactSim->simFlags & b2_simTouchingFlag) != 0;
-		B2_ASSERT(touching == simTouching);
-		// A touching contact should have contact points unless it is a sensor
-		B2_ASSERT(simTouching == (contactSim->manifold.pointCount > 0) || (contact->flags & b2_contactSensorFlag) != 0);
+		B2_ASSERT(touching == simTouching || sensorTouching == simTouching);
+
 		B2_ASSERT(0 <= contactSim->manifold.pointCount && contactSim->manifold.pointCount <= 2);
 	}
 

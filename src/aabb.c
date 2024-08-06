@@ -3,8 +3,6 @@
 
 #include "aabb.h"
 
-#include "box2d/constants.h"
-#include "box2d/geometry.h"
 #include "box2d/math_functions.h"
 
 #include <float.h>
@@ -67,7 +65,7 @@ b2CastOutput b2AABB_RayCast(b2AABB a, b2Vec2 p1, b2Vec2 p2)
 		}
 
 		// Pull the max down
-		tmax = B2_MIN(tmax, t2);
+		tmax = b2MinFloat(tmax, t2);
 
 		if (tmin > tmax)
 		{
@@ -110,7 +108,7 @@ b2CastOutput b2AABB_RayCast(b2AABB a, b2Vec2 p1, b2Vec2 p2)
 		}
 
 		// Pull the max down
-		tmax = B2_MIN(tmax, t2);
+		tmax = b2MinFloat(tmax, t2);
 
 		if (tmin > tmax)
 		{

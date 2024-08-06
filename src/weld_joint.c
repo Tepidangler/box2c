@@ -63,6 +63,17 @@ float b2WeldJoint_GetAngularDampingRatio(b2JointId jointId)
 	return joint->weldJoint.angularDampingRatio;
 }
 
+b2Vec2 b2GetWeldJointForce(b2World* world, b2JointSim* base)
+{
+	b2Vec2 force = b2MulSV(world->inv_h, base->weldJoint.linearImpulse);
+	return force;
+}
+
+float b2GetWeldJointTorque(b2World* world, b2JointSim* base)
+{
+	return world->inv_h * base->weldJoint.angularImpulse;
+}
+
 // Point-to-point constraint
 // C = p2 - p1
 // Cdot = v2 - v1
@@ -111,9 +122,9 @@ void b2PrepareWeldJoint(b2JointSim* base, b2StepContext* context)
 	b2BodySim* bodySimB = setB->sims.data + bodyB->localIndex;
 
 	float mA = bodySimA->invMass;
-	float iA = bodySimA->invI;
+	float iA = bodySimA->invInertia;
 	float mB = bodySimB->invMass;
-	float iB = bodySimB->invI;
+	float iB = bodySimB->invInertia;
 
 	base->invMassA = mA;
 	base->invMassB = mB;
@@ -169,7 +180,7 @@ void b2WarmStartWeldJoint(b2JointSim* base, b2StepContext* context)
 	float iA = base->invIA;
 	float iB = base->invIB;
 
-	// dummy state for static sims
+	// dummy state for static bodies
 	b2BodyState dummyState = b2_identityBodyState;
 
 	b2WeldJoint* joint = &base->weldJoint;
@@ -196,7 +207,7 @@ void b2SolveWeldJoint(b2JointSim* base, const b2StepContext* context, bool useBi
 	float iA = base->invIA;
 	float iB = base->invIB;
 
-	// dummy state for static sims
+	// dummy state for static bodies
 	b2BodyState dummyState = b2_identityBodyState;
 
 	b2WeldJoint* joint = &base->weldJoint;

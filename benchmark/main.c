@@ -7,17 +7,16 @@
 
 #include "box2d/box2d.h"
 #include "box2d/math_functions.h"
-#include "box2d/timer.h"
 
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #if defined(_WIN64)
 	#include <windows.h>
 #elif defined(__APPLE__)
-	// #include <sys/param.h>
-	// #include <sys/sysctl.h>
 	#include <unistd.h>
 #elif defined(__linux__)
 	#include <unistd.h>
@@ -61,27 +60,9 @@ int GetNumberOfCores()
 	GetSystemInfo(&sysinfo);
 	return sysinfo.dwNumberOfProcessors;
 #elif defined(__APPLE__)
-	// int nm[2];
-	// size_t len = 4;
-	// uint32_t count;
-
-	// nm[0] = CTL_HW;
-	// nm[1] = HW_AVAILCPU;
-	// sysctl(nm, 2, &count, &len, NULL, 0);
-
-	// if (count < 1)
-	//{
-	//	nm[1] = HW_NCPU;
-	//	sysctl(nm, 2, &count, &len, NULL, 0);
-	//	if (count < 1)
-	//	{
-	//		count = 1;
-	//	}
-	// }
-	// return count;
-	return sysconf(_SC_NPROCESSORS_ONLN);
+	return (int)sysconf(_SC_NPROCESSORS_ONLN);
 #elif defined(__linux__)
-	return sysconf(_SC_NPROCESSORS_ONLN);
+	(int)return sysconf(_SC_NPROCESSORS_ONLN);
 #else
 	return 1;
 #endif
@@ -148,7 +129,7 @@ int main(int argc, char** argv)
 		if (strncmp(arg, "-t=", 3) == 0)
 		{
 			int threadCount = atoi(arg + 3);
-			maxThreadCount = B2_MIN(maxThreadCount, threadCount);
+			maxThreadCount = b2MinInt(maxThreadCount, threadCount);
 		}
 		else if (strcmp(arg, "-h") == 0)
 		{
@@ -227,7 +208,7 @@ int main(int argc, char** argv)
 				float fps = 1000.0f * stepCount / ms;
 				printf("run %d : %g (ms), %g (fps)\n", runIndex, ms, fps);
 
-				maxFps[threadCount - 1] = B2_MAX(maxFps[threadCount - 1], fps);
+				maxFps[threadCount - 1] = b2MaxFloat(maxFps[threadCount - 1], fps);
 
 				if (countersAcquired == false)
 				{

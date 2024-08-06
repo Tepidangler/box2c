@@ -4,13 +4,13 @@
 
 #include "solver.h"
 
-#include "box2d/joint_types.h"
+#include "box2d/types.h"
 
 typedef struct b2DebugDraw b2DebugDraw;
 typedef struct b2StepContext b2StepContext;
 typedef struct b2World b2World;
 
-/// A joint edge is used to connect sims and joints together
+/// A joint edge is used to connect bodies and joints together
 /// in a joint graph where each body is a node and each joint
 /// is an edge. A joint edge belongs to a doubly linked list
 /// maintained in each attached body. Each joint has two joint
@@ -60,15 +60,19 @@ typedef struct b2Joint
 
 typedef struct b2DistanceJoint
 {
+	float length;
 	float hertz;
 	float dampingRatio;
-	float length;
 	float minLength;
 	float maxLength;
+
+	float maxMotorForce;
+	float motorSpeed;
 
 	float impulse;
 	float lowerImpulse;
 	float upperImpulse;
+	float motorImpulse;
 
 	int indexA;
 	int indexB;
@@ -77,6 +81,10 @@ typedef struct b2DistanceJoint
 	b2Vec2 deltaCenter;
 	b2Softness distanceSoftness;
 	float axialMass;
+
+	bool enableSpring;
+	bool enableLimit;
+	bool enableMotor;
 } b2DistanceJoint;
 
 typedef struct b2MotorJoint
@@ -104,6 +112,7 @@ typedef struct b2MouseJoint
 	b2Vec2 targetA;
 	float hertz;
 	float dampingRatio;
+	float maxForce;
 
 	b2Vec2 linearImpulse;
 	float angularImpulse;
@@ -120,13 +129,14 @@ typedef struct b2PrismaticJoint
 {
 	b2Vec2 localAxisA;
 	b2Vec2 impulse;
+	float springImpulse;
 	float motorImpulse;
 	float lowerImpulse;
 	float upperImpulse;
-	bool enableMotor;
+	float hertz;
+	float dampingRatio;
 	float maxMotorForce;
 	float motorSpeed;
-	bool enableLimit;
 	float referenceAngle;
 	float lowerTranslation;
 	float upperTranslation;
@@ -139,18 +149,24 @@ typedef struct b2PrismaticJoint
 	b2Vec2 deltaCenter;
 	float deltaAngle;
 	float axialMass;
+	b2Softness springSoftness;
+	
+	bool enableSpring;
+	bool enableLimit;
+	bool enableMotor;
 } b2PrismaticJoint;
 
 typedef struct b2RevoluteJoint
 {
 	b2Vec2 linearImpulse;
+	float springImpulse;
 	float motorImpulse;
 	float lowerImpulse;
 	float upperImpulse;
-	bool enableMotor;
+	float hertz;
+	float dampingRatio;
 	float maxMotorTorque;
 	float motorSpeed;
-	bool enableLimit;
 	float referenceAngle;
 	float lowerAngle;
 	float upperAngle;
@@ -162,6 +178,11 @@ typedef struct b2RevoluteJoint
 	b2Vec2 deltaCenter;
 	float deltaAngle;
 	float axialMass;
+	b2Softness springSoftness;
+	
+	bool enableSpring;
+	bool enableMotor;
+	bool enableLimit;
 } b2RevoluteJoint;
 
 typedef struct b2WeldJoint
@@ -188,7 +209,6 @@ typedef struct b2WeldJoint
 
 typedef struct b2WheelJoint
 {
-	// Solver shared
 	b2Vec2 localAxisA;
 	float perpImpulse;
 	float motorImpulse;
@@ -201,10 +221,7 @@ typedef struct b2WheelJoint
 	float upperTranslation;
 	float hertz;
 	float dampingRatio;
-	bool enableMotor;
-	bool enableLimit;
 
-	// Solver temp
 	int indexA;
 	int indexB;
 	b2Vec2 anchorA;
@@ -215,9 +232,13 @@ typedef struct b2WheelJoint
 	float motorMass;
 	float axialMass;
 	b2Softness springSoftness;
+
+	bool enableSpring;
+	bool enableMotor;
+	bool enableLimit;
 } b2WheelJoint;
 
-/// The base joint class. Joints are used to constraint two sims together in
+/// The base joint class. Joints are used to constraint two bodies together in
 /// various fashions. Some joints also feature limits and motors.
 typedef struct b2JointSim
 {

@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2023 Erin Catto
 // SPDX-License-Identifier: MIT
 
-#include "box2d/geometry.h"
+#include "box2d/collision.h"
 #include "box2d/math_functions.h"
 #include "test_macros.h"
-#include "box2d/hull.h"
 
 #include <float.h>
 
@@ -21,7 +20,7 @@ static int ShapeMassTest(void)
 		b2MassData md = b2ComputeCircleMass(&circle, 1.0f);
 		ENSURE_SMALL(md.mass - b2_pi, FLT_EPSILON);
 		ENSURE(md.center.x == 1.0f && md.center.y == 0.0f);
-		ENSURE_SMALL(md.I - 1.5f * b2_pi, FLT_EPSILON);
+		ENSURE_SMALL(md.rotationalInertia - 1.5f * b2_pi, FLT_EPSILON);
 	}
 
 	{
@@ -58,7 +57,7 @@ static int ShapeMassTest(void)
 		b2MassData ma = b2ComputePolygonMass(&ac, 1.0f);
 
 		ENSURE(ma.mass < md.mass && md.mass < mdr.mass);
-		ENSURE(ma.I < md.I && md.I < mdr.I);
+		ENSURE(ma.rotationalInertia < md.rotationalInertia && md.rotationalInertia < mdr.rotationalInertia);
 	}
 
 	{
@@ -66,7 +65,7 @@ static int ShapeMassTest(void)
 		ENSURE_SMALL(md.mass - 4.0f, FLT_EPSILON);
 		ENSURE_SMALL(md.center.x, FLT_EPSILON);
 		ENSURE_SMALL(md.center.y, FLT_EPSILON);
-		ENSURE_SMALL(md.I - 8.0f / 3.0f, 2.0f * FLT_EPSILON);
+		ENSURE_SMALL(md.rotationalInertia - 8.0f / 3.0f, 2.0f * FLT_EPSILON);
 	}
 
 	return 0;

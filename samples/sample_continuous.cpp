@@ -6,8 +6,6 @@
 #include "settings.h"
 
 #include "box2d/box2d.h"
-#include "box2d/geometry.h"
-#include "box2d/hull.h"
 #include "box2d/math_functions.h"
 
 #include <GLFW/glfw3.h>
@@ -15,6 +13,13 @@
 
 // This tests continuous collision robustness and also demonstrates the speed limits imposed
 // by b2_maxTranslation and b2_maxRotation.
+struct HitEvent
+{
+	b2Vec2 point;
+	float speed;
+	int stepIndex;
+};
+
 class BounceHouse : public Sample
 {
 public:
@@ -31,7 +36,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 0.0f};
-			g_camera.m_zoom = 0.45f;
+			g_camera.m_zoom = 25.0f * 0.45f;
 		}
 
 		b2BodyDef bodyDef = b2DefaultBodyDef();
@@ -60,6 +65,7 @@ public:
 
 		m_shapeType = e_circleShape;
 		m_bodyId = b2_nullBodyId;
+		m_enableHitEvents = true;
 
 		Launch();
 	}
@@ -81,6 +87,8 @@ public:
 		b2ShapeDef shapeDef = b2DefaultShapeDef();
 		shapeDef.density = 1.0f;
 		shapeDef.restitution = 1.2f;
+		shapeDef.friction = 0.3f;
+		shapeDef.enableHitEvents = m_enableHitEvents;
 
 		if (m_shapeType == e_circleShape)
 		{
@@ -94,19 +102,19 @@ public:
 		}
 		else
 		{
-			float h = 0.5f;
-			b2Polygon box = b2MakeBox(h, h);
+			float h = 0.1f;
+			b2Polygon box = b2MakeBox(20.0f * h, h);
 			b2CreatePolygonShape(m_bodyId, &shapeDef, &box);
 		}
 	}
 
 	void UpdateUI() override
 	{
-		float height = 70.0f;
+		float height = 100.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
 		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
 
-		ImGui::Begin("Options", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::Begin("Bounce House", nullptr, ImGuiWindowFlags_NoResize);
 
 		const char* shapeTypes[] = {"Circle", "Capsule", "Box"};
 		int shapeType = int(m_shapeType);
@@ -116,7 +124,46 @@ public:
 			Launch();
 		}
 
+		if (ImGui::Checkbox("hit events", &m_enableHitEvents))
+		{
+			b2Body_EnableHitEvents(m_bodyId, m_enableHitEvents);
+		}
+
 		ImGui::End();
+	}
+
+	void Step(Settings& settings) override
+	{
+		Sample::Step(settings);
+
+		b2ContactEvents events = b2World_GetContactEvents(m_worldId);
+		for (int i = 0; i < events.hitCount; ++i)
+		{
+			b2ContactHitEvent* event = events.hitEvents + i;
+
+			HitEvent* e = m_hitEvents + 0;
+			for (int j = 1; j < 4; ++j)
+			{
+				if (m_hitEvents[j].stepIndex < e->stepIndex)
+				{
+					e = m_hitEvents + j;
+				}
+			}
+
+			e->point = event->point;
+			e->speed = event->approachSpeed;
+			e->stepIndex = m_stepCount;
+		}
+
+		for (int i = 0; i < 4; ++i)
+		{
+			HitEvent* e = m_hitEvents + i;
+			if (e->stepIndex > 0 && m_stepCount <= e->stepIndex + 30)
+			{
+				g_draw.DrawCircle(e->point, 0.1f, b2_colorOrangeRed);
+				g_draw.DrawString(e->point, "%.1f", e->speed);
+			}
+		}
 	}
 
 	static Sample* Create(Settings& settings)
@@ -124,8 +171,10 @@ public:
 		return new BounceHouse(settings);
 	}
 
+	HitEvent m_hitEvents[4];
 	b2BodyId m_bodyId;
 	ShapeType m_shapeType;
+	bool m_enableHitEvents;
 };
 
 static int sampleBounceHouse = RegisterSample("Continuous", "Bounce House", BounceHouse::Create);
@@ -139,7 +188,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 0.0f};
-			g_camera.m_zoom = 0.35f;
+			g_camera.m_zoom = 25.0f * 0.35f;
 		}
 
 		b2BodyDef bodyDef = b2DefaultBodyDef();
@@ -214,7 +263,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {1.0f, 5.0f};
-			g_camera.m_zoom = 0.25f;
+			g_camera.m_zoom = 25.0f * 0.25f;
 		}
 
 		{
@@ -291,11 +340,11 @@ public:
 
 	void UpdateUI() override
 	{
-		float height = 130.0f;
+		float height = 110.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
+		ImGui::SetNextWindowSize(ImVec2(140.0f, height));
 
-		ImGui::Begin("Options", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::Begin("Skinny Box", nullptr, ImGuiWindowFlags_NoResize);
 
 		ImGui::Checkbox("Capsule", &m_capsule);
 
@@ -351,7 +400,7 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {1.5f, 16.0f};
-			g_camera.m_zoom = 0.8f;
+			g_camera.m_zoom = 25.0f * 0.8f;
 		}
 
 		m_groundId = b2_nullBodyId;
@@ -547,18 +596,19 @@ public:
 		else
 		{
 			float h = 0.5f - m_round;
-			b2Polygon box = b2MakeRoundedBox(h, h, m_round);
+			b2Polygon box = b2MakeRoundedBox(h, 2.0f * h, m_round);
 			m_shapeId = b2CreatePolygonShape(m_bodyId, &shapeDef, &box);
 		}
 	}
 
 	void UpdateUI() override
 	{
-		float height = 160.0f;
+		float height = 140.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
+		ImGui::SetNextWindowSize(ImVec2(180.0f, height));
 
 		ImGui::Begin("Ghost Collision", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::PushItemWidth(100.0f);
 
 		if (ImGui::Checkbox("Chain", &m_useChain))
 		{
@@ -600,6 +650,7 @@ public:
 			Launch();
 		}
 
+		ImGui::PopItemWidth();
 		ImGui::End();
 	}
 
@@ -620,17 +671,18 @@ public:
 
 static int sampleGhostCollision = RegisterSample("Continuous", "Ghost Collision", GhostCollision::Create);
 
-// Speculative collision failure case suggested by Dirk Gregorius
-class SpeculativeFail : public Sample
+// Speculative collision failure case suggested by Dirk Gregorius. This uses
+// a simple fallback scheme to prevent tunneling.
+class SpeculativeFallback : public Sample
 {
 public:
-	explicit SpeculativeFail(Settings& settings)
+	explicit SpeculativeFallback(Settings& settings)
 		: Sample(settings)
 	{
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {1.0f, 5.0f};
-			g_camera.m_zoom = 0.25f;
+			g_camera.m_zoom = 25.0f * 0.25f;
 		}
 
 		{
@@ -652,7 +704,7 @@ public:
 			float offset = 8.0f;
 			b2BodyDef bodyDef = b2DefaultBodyDef();
 			bodyDef.type = b2_dynamicBody;
-			bodyDef.position = {offset, 8.0f};
+			bodyDef.position = {offset, 12.0f};
 			bodyDef.linearVelocity = {0.0f, -100.0f};
 			b2BodyId bodyId = b2CreateBody(m_worldId, &bodyDef);
 
@@ -664,11 +716,11 @@ public:
 
 	static Sample* Create(Settings& settings)
 	{
-		return new SpeculativeFail(settings);
+		return new SpeculativeFallback(settings);
 	}
 };
 
-static int sampleSpeculativeFail = RegisterSample("Continuous", "Speculative Fail", SpeculativeFail::Create);
+static int sampleSpeculativeFallback = RegisterSample("Continuous", "Speculative Fallback", SpeculativeFallback::Create);
 
 // This shows a fast moving body that uses continuous collision versus static and dynamic bodies.
 // This is achieved by setting the ball body as a *bullet*.
@@ -681,8 +733,10 @@ public:
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 9.0f};
-			g_camera.m_zoom = 0.5f;
+			g_camera.m_zoom = 25.0f * 0.5f;
 		}
+
+		settings.drawJoints = false;
 
 		// Ground body
 		b2BodyId groundId = {};

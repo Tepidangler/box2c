@@ -6,8 +6,6 @@
 #include "settings.h"
 
 #include "box2d/box2d.h"
-#include "box2d/geometry.h"
-#include "box2d/hull.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -19,6 +17,12 @@ class HighMassRatio1 : public Sample
 	explicit HighMassRatio1(Settings& settings)
 		: Sample(settings)
 	{
+		if (settings.restart == false)
+		{
+			g_camera.m_center = {3.0f, 14.0f};
+			g_camera.m_zoom = 25.0f;
+		}
+
 		float extent = 1.0f;
 
 		{
@@ -77,6 +81,12 @@ class HighMassRatio2 : public Sample
 	explicit HighMassRatio2(Settings& settings)
 		: Sample(settings)
 	{
+		if (settings.restart == false)
+		{
+			g_camera.m_center = {0.0f, 16.5f};
+			g_camera.m_zoom = 25.0f;
+		}
+
 		{
 			b2BodyDef bodyDef = b2DefaultBodyDef();
 			b2BodyId groundId = b2CreateBody(m_worldId, &bodyDef);
@@ -134,7 +144,7 @@ class OverlapRecovery : public Sample
 		if (settings.restart == false)
 		{
 			g_camera.m_center = {0.0f, 2.5f};
-			g_camera.m_zoom = 0.15f;
+			g_camera.m_zoom = 25.0f * 0.15f;
 		}
 
 		m_bodyIds = nullptr;
@@ -209,11 +219,12 @@ class OverlapRecovery : public Sample
 
 	void UpdateUI() override
 	{
-		float height = 220.0f;
+		float height = 210.0f;
 		ImGui::SetNextWindowPos(ImVec2(10.0f, g_camera.m_height - height - 50.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(240.0f, height));
+		ImGui::SetNextWindowSize(ImVec2(220.0f, height));
 
-		ImGui::Begin("Stacks", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::Begin("Overlap Recovery", nullptr, ImGuiWindowFlags_NoResize);
+		ImGui::PushItemWidth(100.0f);
 
 		bool changed = false;
 		changed = changed || ImGui::SliderFloat("Extent", &m_extent, 0.1f, 1.0f, "%.1f");
@@ -229,6 +240,7 @@ class OverlapRecovery : public Sample
 			CreateScene();
 		}
 
+		ImGui::PopItemWidth();
 		ImGui::End();
 	}
 
