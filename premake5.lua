@@ -1,8 +1,11 @@
 project "Box2D"
 	kind "StaticLib"
-	language "C++"
-	cppdialect "C++11"
-	staticruntime "off"
+	language "C"
+	cppdialect "C++17"
+	cdialect "C11"
+	vectorextensions "SSE2"
+	staticruntime "on"
+	buildoptions {"/experimental:c11atomics"}
 
 	targetdir ("bin/" .. outputdir .. "/%{prj.name}")
 	objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
@@ -17,11 +20,13 @@ project "Box2D"
 	includedirs
 	{
 		"include",
-		"src"
+		"src",
+		"extern/simde"
 	}
 
 	filter "system:windows"
 		systemversion "latest"
+		flags{}
 
 	filter "configurations:Debug"
 		runtime "Debug"
